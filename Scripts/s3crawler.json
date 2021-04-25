@@ -1,0 +1,23 @@
+{
+    "S3Targets": [
+      {
+        "Path": "string",
+        "Exclusions": ["string", ...]
+      }
+      ...
+    ],
+    "JdbcTargets": [
+      {
+        "ConnectionName": "string",
+        "Path": "string",
+        "Exclusions": ["string", ...]
+      }
+      ...
+    ],
+    "DynamoDBTargets": [
+      {
+        "Path": "string"
+      }
+      ...
+    ]
+  }
