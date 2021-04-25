@@ -1,0 +1,342 @@
+# Repo https://github.com/godwillngwanah/cfts.io.git
+--- 
+AWSTemplateFormatVersion: "2010-09-09"
+Parameters: 
+  RawBucket: 
+    Description: "Name of the Bucket to store the Raw data."
+    Type: String
+    Default: gluedeltatest-01
+    
+  ScriptBucketName:
+    Description: "Name of the S3 bucket, where glue script will be uploaded"
+    Type: String
+    Default: gluetestdelta-script-bucket
+
+  testdb: 
+    Description: "Source Database Name."
+    Type: String
+    Default: testdb
+  
+  GlueController:
+    Description: "Glue job"
+    Type: String
+    Default: Glue_Controller
+
+  Table1:
+    Description: "Source Table Name."
+    Type: String
+    Default: table1
+
+  CrawlerSchedule: 
+    Default: "cron(5 0 * * ? *)"
+    Description: "Crawler Execution Schedule Cron Expression"
+    Type: String
+
+  # PROMPT FOR WHETHER OR NOT TO ENABLE VERSIONING WITHIN THIS BUCKET
+  Versioning:
+    Type: String
+    Description: Specify whether or not versioning should be enabled within this bucket
+    AllowedValues: ['true', 'false']
+    Default: false
+
+  # PROMPT FOR USING AN AWS MANAGED KMS KEY OR ENTER A KMS KEY ARN
+  AWSKMSKey:
+    Type: String
+    Description: Specify whether you want to use the AWS managed key or enter your own KMS master key arn
+    AllowedValues: ['AWS managed key (aws/s3)','Enter KMS master key ARN']
+
+  # PROMPT FOR THE KMS KEY ARN (OPTIONAL)
+  KMSKeyArn:
+    Type: String
+    Description: If you selected 'Enter KMS mater key ARN' then you can enter the Arn of the KMS Key here.  If you are using an AWS managed key you can leave this parameter blank.'
+
+  # PROMPT FOR THE DATACLASSIFICATION VALUE WHICH WILL BE USED WHEN TAGGING THE BUCKET
+  dataClassification:
+    Description: The value for the dataClassificationParameter tag
+    Type: String
+    AllowedValues: ['internal', 'public', 'confidential', 'restricted']
+    Default: internal
+
+  # IAMRoleName:
+  #   Type: String
+  #   Description: The name of IAM assume role.
+  #   AllowedPattern: ^[a-zA-Z0-9_.-]*$
+  #   Default: delegate-admin-delegate-admin-Glue_Execution_Role
+
+Conditions:
+  useCustomKey: !Equals
+    - !Ref AWSKMSKey
+    - 'Enter KMS master key ARN'
+  enableVersioning: !Equals
+    - !Ref Versioning
+    - true
+
+Resources:  
+  RawBucket1:
+    Type: "AWS::S3::Bucket"  
+    Properties: 
+      BucketName: 
+        Ref: RawBucket
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: !If [enableVersioning, Enabled, Suspended]
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !If [useCustomKey, !Ref KMSKeyArn, !Ref 'AWS::NoValue']        
+
+  ScriptBucket1:
+    Type: "AWS::S3::Bucket"  
+    Properties: 
+      BucketName: 
+        Ref: ScriptBucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: !If [enableVersioning, Enabled, Suspended]
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !If [useCustomKey, !Ref KMSKeyArn, !Ref 'AWS::NoValue']    
+
+  # SampleBucketPolicy:
+  #   Type: 'AWS::S3::BucketPolicy'
+  #   Properties:
+  #     Bucket: !Ref RawBucket
+  #     PolicyDocument:
+  #       Statement:
+  #         - Action:
+  #            - 's3:GetObject'
+  #           #  - 's3:PutObject'
+  #           Effect: Allow
+  #           Resource: !Join
+  #             - ''
+  #             - - 'arn:aws:s3:::'
+  #               - !Ref RawBucket
+  #               - /*
+  #           Principal: '*'
+  #           Condition:
+  #             StringLike:
+  #               'aws:Referer':
+  #                 - 'http://www.example.com/*'
+  #                 - 'http://example.net/*'
+
+  Database:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: !Ref testdb	
+        Description: Test database
+
+  TESTTable:
+    DependsOn: Database
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref testdb
+      TableInput:
+        Name: !Ref Table1
+        Description: Define the first few columns of the test table
+        TableType: EXTERNAL_TABLE
+        Parameters: {
+    "classification": "csv"
+  }
+#       ViewExpandedText: String
+        PartitionKeys:
+        # Data is partitioned by month
+        - Name: mon
+          Type: bigint
+        StorageDescriptor:
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          Columns:
+          - Name: year
+            Type: bigint
+          - Name: quarter
+            Type: bigint
+          - Name: month
+            Type: bigint
+          - Name: day_of_month
+            Type: bigint			
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          Location: s3://crawler-public-us-east-1/test/2016/csv/
+          SerdeInfo:
+            Parameters:
+              field.delim: ","
+            SerializationLibrary: org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe
+
+  # Partition 1
+  TESTPartitionMon1:
+    DependsOn: TESTTable
+    Type: AWS::Glue::Partition
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref testdb
+      TableName: !Ref Table1
+      PartitionInput:
+        Values:
+        - 1
+        StorageDescriptor:
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          Columns:
+          - Name: mon
+            Type: bigint
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          Location: s3://crawler-public-us-east-1/test/2016/csv/mon=1/
+          SerdeInfo:
+            Parameters:
+              field.delim: ","
+            SerializationLibrary: org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe
+
+  # Partition 2
+  TESTPartitionMon2:
+    DependsOn: TESTTable
+    Type: AWS::Glue::Partition
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref testdb
+      TableName: !Ref Table1
+      PartitionInput:
+        Values:
+        - 2
+        StorageDescriptor:
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          Columns:
+          - Name: mon
+            Type: bigint
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          Location: s3://crawler-public-us-east-1/test/2016/csv/mon=2/
+          SerdeInfo:
+            Parameters:
+              field.delim: ","
+            SerializationLibrary: org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe
+
+  # Partition 3
+  TESTPartitionMon3:
+    DependsOn: TESTTable
+    Type: AWS::Glue::Partition
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref testdb
+      TableName: !Ref Table1
+      PartitionInput:
+        Values:
+        - 3
+        StorageDescriptor:
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          Columns:
+          - Name: mon
+            Type: bigint
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          Location: s3://crawler-public-us-east-1/test/2016/csv/mon=3/
+          SerdeInfo:
+            Parameters:
+              field.delim: ","
+            SerializationLibrary: org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe
+
+  # Partition 4
+  TESTPartitionMon4:
+    DependsOn: TESTTable
+    Type: AWS::Glue::Partition
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref testdb
+      TableName: !Ref Table1
+      PartitionInput:
+        Values:
+        - 4
+        StorageDescriptor:
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          Columns:
+          - Name: mon
+            Type: bigint
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          Location: s3://crawler-public-us-east-1/test/2016/csv/mon=4/
+          SerdeInfo:
+            Parameters:
+              field.delim: ","
+            SerializationLibrary: org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe
+
+  # IAM created that will be used for crawlers and glue jobs
+  ExecutionRole:
+    Type: "AWS::IAM::Role"  
+    Properties:
+      RoleName: delegate-admin-Glue_Execution_Role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - glue.amazonaws.com
+                - s3.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+        - arn:aws:iam::aws:policy/CloudWatchFullAccess
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+      Path: "/" 
+      #  Allow this option is users/userrole has permission boundry set
+      # PermissionsBoundary: 'arn:aws:iam::426093870921:policy/cft-developer-boundary-policy' 
+
+  GlueCrawler:  
+    Type: AWS::Glue::Crawler
+    Properties:
+      Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/delegate-admin-Glue_Execution_Role'
+      Schedule:
+        ScheduleExpression:
+          Ref: CrawlerSchedule
+      DatabaseName:
+        Ref: testdb
+      Targets:
+        S3Targets:
+          -
+            Path:
+              Fn::Join :
+                - "/"
+                -
+                  - Ref : RawBucket
+                  - Ref : testdb
+                  - Ref : Table1
+    DependsOn: ExecutionRole
+
+  GlueJobController: 
+    Type: AWS::Glue::Job
+    Properties:
+      Name: Glue_Controller
+      Role:
+        Fn::GetAtt: [ExecutionRole, Arn]
+      MaxCapacity: 2
+      ExecutionProperty:
+        MaxConcurrentRuns: 2
+      Command:
+        Name: glueetl
+        PythonVersion: 3
+        ScriptLocation: !Sub "s3://${ScriptBucketName}/script_2021-0.py"
+      DefaultArguments:
+        "--job-bookmark-option" : "job-bookmark-disable"
+        "--temp_bucket": !Ref "RawBucket"
+
+  Trigger:
+    Type: AWS::Glue::Trigger
+    Properties:
+      Type: ON_DEMAND
+      Name: !Sub
+        - "Glue-Trigger-${GlueController}"
+        - {testdb: !Ref testdb}
+      Actions:
+        - JobName: Glue_Controller
+          Arguments:
+            '--bucket_name': !Ref RawBucket
+            '--database_name': !Ref testdb
+            '--table_name' : !Ref Table1
